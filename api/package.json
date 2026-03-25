@@ -50,6 +50,7 @@
     "stream-to-array": "^2.3.0",
     "streamifier": "0.1.1",
     "superagent": "^8.0.9",
+    "better-sqlite3": "^8.2.0",
     "try-json": "1.0.0",
     "yauzl": "2.6.0",
     "yazl": "2.2.2"

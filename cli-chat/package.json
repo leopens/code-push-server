@@ -1,0 +1,19 @@
+{
+  "name": "code-push-chat",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CodePush LLM agent, separate from CLI",
+  "main": "./script/code-push-chat.js",
+  "bin": {
+    "code-push-chat": "./script/code-push-chat.js"
+  },
+  "scripts": {
+    "start": "node -r dotenv/config ./script/code-push-chat.js",
+    "start:env": "node -r dotenv/config ./script/code-push-chat.js dotenv_config_path=.env dotenv_config_silent=true",
+    "build": "mkdir -p bin/script && cp script/code-push-chat.js bin/script/code-push-chat.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.0.0",
+    "axios": "^1.6.0"
+  }
+}

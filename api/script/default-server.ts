@@ -3,6 +3,7 @@
 
 import * as api from "./api";
 import { AzureStorage } from "./storage/azure-storage";
+import { SqliteStorage } from "./storage/sqlite-storage";
 import { fileUploadMiddleware } from "./file-upload-manager";
 import { JsonStorage } from "./storage/json-storage";
 import { RedisManager } from "./redis-manager";
@@ -12,6 +13,7 @@ const { DefaultAzureCredential } = require("@azure/identity");
 const { SecretClient } = require("@azure/keyvault-secrets");
 
 import * as bodyParser from "body-parser";
+import * as path from "path";
 const domain = require("express-domain-middleware");
 import * as express from "express";
 import * as q from "q";
@@ -34,7 +36,11 @@ function bodyParserErrorHandler(err: any, req: express.Request, res: express.Res
   }
 }
 
-export function start(done: (err?: any, server?: express.Express, storage?: Storage) => void, useJsonStorage?: boolean): void {
+export function start(
+  done: (err?: any, server?: express.Express, storage?: Storage) => void,
+  useJsonStorage?: boolean,
+  useSqliteStorage?: boolean
+): void {
   let storage: Storage;
   let isKeyVaultConfigured: boolean;
   let keyvaultClient: any;
@@ -43,6 +49,8 @@ export function start(done: (err?: any, server?: express.Express, storage?: Stor
     .then(async () => {
       if (useJsonStorage) {
         storage = new JsonStorage();
+      } else if (useSqliteStorage || process.env.STORAGE_MODE === "sqlite") {
+        storage = new SqliteStorage(process.env.SQLITE_DB_PATH);
       } else if (!process.env.AZURE_KEYVAULT_ACCOUNT) {
         storage = new AzureStorage();
       } else {
@@ -131,6 +139,9 @@ export function start(done: (err?: any, server?: express.Express, storage?: Stor
       app.set("views", __dirname + "/views");
       app.set("view engine", "ejs");
       app.use("/auth/images/", express.static(__dirname + "/views/images"));
+      if (useSqliteStorage || process.env.STORAGE_MODE === "sqlite") {
+        app.use("/blobs", express.static(path.resolve(process.env.SQLITE_BLOB_DIR || "./sqlite-blobs")));
+      }
       app.use(api.headers({ origin: process.env.CORS_ORIGIN || "http://localhost:4000" }));
       app.use(api.health({ storage: storage, redisManager: redisManager }));
 

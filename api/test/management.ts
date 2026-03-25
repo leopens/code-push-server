@@ -17,12 +17,14 @@ import * as testUtils from "./utils";
 
 import { AzureStorage } from "../script/storage/azure-storage";
 import { JsonStorage } from "../script/storage/json-storage";
+import { SqliteStorage } from "../script/storage/sqlite-storage";
 
 import Permissions = storage.Permissions;
 
 if (!process.env.AZURE_MANAGEMENT_URL) {
   // cannot use local JSON storage when running tests against an Azure server
   describe("Management Rest API with JSON Storage", () => managementTests(/*useJsonStorage=*/ true));
+  describe("Management Rest API with SQLite Storage", () => managementTests(/*useJsonStorage=*/ false, /*useSqliteStorage=*/ true));
 }
 
 if (process.env.TEST_AZURE_STORAGE) {
@@ -31,7 +33,7 @@ if (process.env.TEST_AZURE_STORAGE) {
 
 const ACCESS_KEY_MASKING_STRING = "(hidden)";
 
-function managementTests(useJsonStorage?: boolean): void {
+function managementTests(useJsonStorage?: boolean, useSqliteStorage?: boolean): void {
   var server: express.Express;
   var serverUrl: string;
   var storage: storage.Storage;
@@ -59,13 +61,17 @@ function managementTests(useJsonStorage?: boolean): void {
           // use the middleware defined in DefaultServer
           var deferred: q.Deferred<void> = q.defer<void>();
 
-          defaultServer.start(function (err: Error, app: express.Express, serverStorage: storage.Storage) {
-            if (err) deferred.reject(err);
+          defaultServer.start(
+            function (err: Error, app: express.Express, serverStorage: storage.Storage) {
+              if (err) deferred.reject(err);
 
-            server = app;
-            storage = serverStorage;
-            deferred.resolve(<void>null);
-          }, useJsonStorage);
+              server = app;
+              storage = serverStorage;
+              deferred.resolve(<void>null);
+            },
+            useJsonStorage,
+            useSqliteStorage
+          );
 
           return deferred.promise;
         }
