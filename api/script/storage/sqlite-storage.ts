@@ -297,25 +297,29 @@ export class SqliteStorage implements storage.Storage {
           (key: string) => app.collaborators[key].permission === storage.Permissions.Owner
         );
 
-        if (ownerEmail) {
-          this._db
-            .prepare("UPDATE app_collaborators SET permission = ? WHERE appId = ? AND accountId = ?")
-            .run(storage.Permissions.Collaborator, appId, app.collaborators[ownerEmail].accountId);
-        }
+        // Use transaction to ensure atomicity
+        const tx = this._db.transaction(() => {
+          if (ownerEmail) {
+            this._db
+              .prepare("UPDATE app_collaborators SET permission = ? WHERE appId = ? AND accountId = ?")
+              .run(storage.Permissions.Collaborator, appId, app.collaborators[ownerEmail].accountId);
+          }
 
-        const targetCollaboratorRow = this._db
-          .prepare("SELECT 1 FROM app_collaborators WHERE appId = ? AND accountId = ?")
-          .get(appId, targetAccount.id);
+          const targetCollaboratorRow = this._db
+            .prepare("SELECT 1 FROM app_collaborators WHERE appId = ? AND accountId = ?")
+            .get(appId, targetAccount.id);
 
-        if (targetCollaboratorRow) {
-          this._db
-            .prepare("UPDATE app_collaborators SET permission = ? WHERE appId = ? AND accountId = ?")
-            .run(storage.Permissions.Owner, appId, targetAccount.id);
-        } else {
-          this._db
-            .prepare("INSERT INTO app_collaborators (appId, accountId, permission) VALUES (?, ?, ?)")
-            .run(appId, targetAccount.id, storage.Permissions.Owner);
-        }
+          if (targetCollaboratorRow) {
+            this._db
+              .prepare("UPDATE app_collaborators SET permission = ? WHERE appId = ? AND accountId = ?")
+              .run(storage.Permissions.Owner, appId, targetAccount.id);
+          } else {
+            this._db
+              .prepare("INSERT INTO app_collaborators (appId, accountId, permission) VALUES (?, ?, ?)")
+              .run(appId, targetAccount.id, storage.Permissions.Owner);
+          }
+        });
+        tx();
 
         return q(<void>null);
       });
@@ -398,24 +402,60 @@ export class SqliteStorage implements storage.Storage {
 
   public getDeployment(accountId: string, appId: string, deploymentId: string): Promise<storage.Deployment> {
     const row = this._db
-      .prepare("SELECT id, name, key, createdTime FROM deployments WHERE id = ? AND appId = ?")
+      .prepare("SELECT id, name, key, createdTime, packageId FROM deployments WHERE id = ? AND appId = ?")
       .get(deploymentId, appId);
 
     if (!row) {
       return q.reject(storage.storageError(storage.ErrorCode.NotFound));
     }
 
-    return q(<storage.Deployment>{
+    const deployment: storage.Deployment = {
       id: row.id,
       name: row.name,
       key: row.key,
       createdTime: row.createdTime,
-    });
+    };
+
+    // Get current package if exists
+    if (row.packageId) {
+      const packageRow = this._db
+        .prepare("SELECT packageJson FROM packages WHERE id = ?")
+        .get(row.packageId);
+      if (packageRow) {
+        deployment.package = JSON.parse(packageRow.packageJson);
+      }
+    }
+
+    return q(deployment);
   }
 
   public getDeployments(accountId: string, appId: string): Promise<storage.Deployment[]> {
-    const deployments = this._db.prepare("SELECT id, name, key, createdTime FROM deployments WHERE appId = ?").all(appId);
-    return q(storage.clone(deployments));
+    const rows = this._db
+      .prepare("SELECT id, name, key, createdTime, packageId FROM deployments WHERE appId = ?")
+      .all(appId);
+
+    const deployments: storage.Deployment[] = rows.map((row: any) => {
+      const deployment: storage.Deployment = {
+        id: row.id,
+        name: row.name,
+        key: row.key,
+        createdTime: row.createdTime,
+      };
+
+      // Get current package if exists
+      if (row.packageId) {
+        const packageRow = this._db
+          .prepare("SELECT packageJson FROM packages WHERE id = ?")
+          .get(row.packageId);
+        if (packageRow) {
+          deployment.package = JSON.parse(packageRow.packageJson);
+        }
+      }
+
+      return deployment;
+    });
+
+    return q(deployments);
   }
 
   public removeDeployment(accountId: string, appId: string, deploymentId: string): Promise<void> {
@@ -424,8 +464,12 @@ export class SqliteStorage implements storage.Storage {
       return q.reject(storage.storageError(storage.ErrorCode.NotFound));
     }
 
-    this._db.prepare("DELETE FROM packages WHERE deploymentId = ?").run(deploymentId);
-    this._db.prepare("DELETE FROM deployments WHERE id = ?").run(deploymentId);
+    // Use transaction to ensure atomicity
+    const tx = this._db.transaction(() => {
+      this._db.prepare("DELETE FROM packages WHERE deploymentId = ?").run(deploymentId);
+      this._db.prepare("DELETE FROM deployments WHERE id = ?").run(deploymentId);
+    });
+    tx();
 
     return q(<void>null);
   }
@@ -473,48 +517,60 @@ export class SqliteStorage implements storage.Storage {
           appPackage.releasedBy = account ? account.email : undefined;
 
           const lastPackage = history.length ? history[history.length - 1] : null;
-          if (lastPackage) {
-            lastPackage.rollout = null;
-          }
 
           appPackage.uploadTime = appPackage.uploadTime || new Date().getTime();
 
           const id = shortid.generate();
           const packageJson = JSON.stringify(appPackage);
 
-          this._db
-            .prepare(
-              "INSERT INTO packages (id, deploymentId, label, appVersion, packageHash, releasedBy, releaseMethod, rollout, size, isDisabled, isMandatory, uploadTime, diffPackageMap, packageJson) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-            )
-            .run(
-              id,
-              deploymentId,
-              appPackage.label,
-              appPackage.appVersion,
-              appPackage.packageHash,
-              appPackage.releasedBy,
-              appPackage.releaseMethod,
-              appPackage.rollout,
-              appPackage.size,
-              appPackage.isDisabled ? 1 : 0,
-              appPackage.isMandatory ? 1 : 0,
-              appPackage.uploadTime,
-              appPackage.diffPackageMap ? JSON.stringify(appPackage.diffPackageMap) : null,
-              packageJson
-            );
+          // Use transaction to ensure atomicity
+          const tx = this._db.transaction(() => {
+            // Insert new package
+            this._db
+              .prepare(
+                "INSERT INTO packages (id, deploymentId, label, appVersion, packageHash, releasedBy, releaseMethod, rollout, size, isDisabled, isMandatory, uploadTime, diffPackageMap, packageJson) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+              )
+              .run(
+                id,
+                deploymentId,
+                appPackage.label,
+                appPackage.appVersion,
+                appPackage.packageHash,
+                appPackage.releasedBy,
+                appPackage.releaseMethod,
+                appPackage.rollout,
+                appPackage.size,
+                appPackage.isDisabled ? 1 : 0,
+                appPackage.isMandatory ? 1 : 0,
+                appPackage.uploadTime,
+                appPackage.diffPackageMap ? JSON.stringify(appPackage.diffPackageMap) : null,
+                packageJson
+              );
 
-          this._db.prepare("UPDATE deployments SET packageId = ? WHERE id = ?").run(id, deploymentId);
+            // Update deployment's current package reference
+            this._db.prepare("UPDATE deployments SET packageId = ? WHERE id = ?").run(id, deploymentId);
 
-          const maxHistory = 50;
-          const toDelete = this._db
-            .prepare("SELECT id FROM packages WHERE deploymentId = ? ORDER BY uploadTime DESC LIMIT -1 OFFSET ?")
-            .all(deploymentId, maxHistory);
-          if (toDelete && toDelete.length) {
-            const deleteStmt = this._db.prepare("DELETE FROM packages WHERE id = ?");
-            for (const row of toDelete) {
-              deleteStmt.run(row.id);
+            // Unset rollout value for last package (for rollback)
+            if (lastPackage && lastPackage.label) {
+              this._db
+                .prepare("UPDATE packages SET rollout = NULL WHERE deploymentId = ? AND label = ?")
+                .run(deploymentId, lastPackage.label);
             }
-          }
+
+            // Clean up old packages beyond max history
+            const maxHistory = 50;
+            const toDelete = this._db
+              .prepare("SELECT id FROM packages WHERE deploymentId = ? ORDER BY uploadTime DESC LIMIT -1 OFFSET ?")
+              .all(deploymentId, maxHistory);
+            if (toDelete && toDelete.length) {
+              const deleteStmt = this._db.prepare("DELETE FROM packages WHERE id = ?");
+              for (const row of toDelete) {
+                deleteStmt.run(row.id);
+              }
+            }
+          });
+
+          tx();
 
           return q(appPackage);
         });
@@ -528,8 +584,12 @@ export class SqliteStorage implements storage.Storage {
       return q.reject(storage.storageError(storage.ErrorCode.NotFound));
     }
 
-    this._db.prepare("DELETE FROM packages WHERE deploymentId = ?").run(deploymentId);
-    this._db.prepare("UPDATE deployments SET packageId = NULL WHERE id = ?").run(deploymentId);
+    // Use transaction to ensure atomicity
+    const tx = this._db.transaction(() => {
+      this._db.prepare("DELETE FROM packages WHERE deploymentId = ?").run(deploymentId);
+      this._db.prepare("UPDATE deployments SET packageId = NULL WHERE id = ?").run(deploymentId);
+    });
+    tx();
 
     return q(<void>null);
   }
@@ -639,9 +699,17 @@ export class SqliteStorage implements storage.Storage {
       return q.reject(storage.storageError(storage.ErrorCode.NotFound, "Blob not found"));
     }
 
-    const port = process.env.API_PORT || process.env.PORT || 3000;
-    const host = process.env.API_HOST || "localhost";
-    const baseUrl = process.env.SQLITE_BLOB_URL_BASE || `http://${host}:${port}`;
+    // Priority: 1. SQLITE_BLOB_URL_BASE, 2. SERVER_URL, 3. fallback to API_HOST/PORT
+    let baseUrl: string;
+    if (process.env.SQLITE_BLOB_URL_BASE) {
+      baseUrl = process.env.SQLITE_BLOB_URL_BASE;
+    } else if (process.env.SERVER_URL) {
+      baseUrl = process.env.SERVER_URL;
+    } else {
+      const port = process.env.API_PORT || process.env.PORT || 3000;
+      const host = process.env.API_HOST || "localhost";
+      baseUrl = `http://${host}:${port}`;
+    }
 
     return q(`${baseUrl}/blobs/${encodeURIComponent(blobId)}`);
   }

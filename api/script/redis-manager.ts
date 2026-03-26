@@ -91,6 +91,14 @@ export class RedisManager {
   private static DEFAULT_EXPIRY: number = 3600; // one hour, specified in seconds
   private static METRICS_DB: number = 1;
 
+  private static isTlsEnabled(): boolean {
+    if (typeof process.env.REDIS_TLS === "string" && process.env.REDIS_TLS.length > 0) {
+      return process.env.REDIS_TLS === "true";
+    }
+
+    return String(process.env.REDIS_PORT) === "6380";
+  }
+
   private _opsClient: redis.RedisClient;
   private _promisifiedOpsClient: PromisifiedRedisClient;
   private _metricsClient: redis.RedisClient;
@@ -99,15 +107,22 @@ export class RedisManager {
 
   constructor() {
     if (process.env.REDIS_HOST && process.env.REDIS_PORT) {
-      const redisConfig = {
+      const redisConfig: any = {
         host: process.env.REDIS_HOST,
         port: process.env.REDIS_PORT,
-        auth_pass: process.env.REDIS_KEY,
-        tls: {
+      };
+
+      if (process.env.REDIS_KEY) {
+        redisConfig.auth_pass = process.env.REDIS_KEY;
+      }
+
+      if (RedisManager.isTlsEnabled()) {
+        redisConfig.tls = {
           // Note: Node defaults CA's to those trusted by Mozilla
           rejectUnauthorized: true,
-        },
-      };
+        };
+      }
+
       this._opsClient = redis.createClient(redisConfig);
       this._metricsClient = redis.createClient(redisConfig);
       this._opsClient.on("error", (err: Error) => {
@@ -134,7 +149,7 @@ export class RedisManager {
 
   public checkHealth(): Promise<void> {
     if (!this.isEnabled) {
-      return q.reject<void>("Redis manager is not enabled");
+      return q<void>(null);
     }
 
     return q.all([this._promisifiedOpsClient.ping(), this._promisifiedMetricsClient.ping()]).spread<void>(() => {});

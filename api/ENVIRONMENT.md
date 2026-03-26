@@ -49,6 +49,7 @@ To enable the Redis caching layer, set:
 - `REDIS_HOST`: The IP address where the Redis server is hosted (e.g.: codepush.redis.cache.windows.net)
 - `REDIS_PORT`: The port which Redis is listening on (usually 6379 for HTTP and 6380 for HTTPS). Note that node_redis does not support HTTPS natively.
 - `REDIS_KEY` (If authentication is enabled for Redis): The key used to authenticate requests to the Redis cache.
+- `REDIS_TLS`: Set to 'true' to enable TLS explicitly. Defaults to 'true' when `REDIS_PORT=6380`, otherwise defaults to 'false'.
 
 ### Unit testing
 To perform the unit tests against Azure storage:
